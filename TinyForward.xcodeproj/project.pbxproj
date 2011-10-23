@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		CEE4224C14536669005E216E /* main.c in Sources */ = {isa = PBXBuildFile; fileRef = CEE4224B14536669005E216E /* main.c */; };
+		CEE4224C14536669005E216E /* tinyforward.c in Sources */ = {isa = PBXBuildFile; fileRef = CEE4224B14536669005E216E /* tinyforward.c */; };
 		CEE4224E14536669005E216E /* TinyForward.1 in CopyFiles */ = {isa = PBXBuildFile; fileRef = CEE4224D14536669005E216E /* TinyForward.1 */; };
 /* End PBXBuildFile section */
 
@@ -26,7 +26,7 @@
 
 /* Begin PBXFileReference section */
 		CEE4224714536669005E216E /* TinyForward */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = TinyForward; sourceTree = BUILT_PRODUCTS_DIR; };
-		CEE4224B14536669005E216E /* main.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = main.c; sourceTree = "<group>"; };
+		CEE4224B14536669005E216E /* tinyforward.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = tinyforward.c; sourceTree = "<group>"; };
 		CEE4224D14536669005E216E /* TinyForward.1 */ = {isa = PBXFileReference; lastKnownFileType = text.man; path = TinyForward.1; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -60,7 +60,7 @@
 		CEE4224A14536669005E216E /* TinyForward */ = {
 			isa = PBXGroup;
 			children = (
-				CEE4224B14536669005E216E /* main.c */,
+				CEE4224B14536669005E216E /* tinyforward.c */,
 				CEE4224D14536669005E216E /* TinyForward.1 */,
 			);
 			path = TinyForward;
@@ -113,7 +113,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				CEE4224C14536669005E216E /* main.c in Sources */,
+				CEE4224C14536669005E216E /* tinyforward.c in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
