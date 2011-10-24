@@ -32,7 +32,9 @@ struct ProxySocket {
     int id;
     struct ProxySocket *destinationSocket;
     char *bytesRead;
+    char *bytesWritten;
     ssize_t readSize;
+    ssize_t writeSize;
     Socket *nextSocket;
 };
 
@@ -47,7 +49,9 @@ Socket *addSocket(int socketId, SocketType type)
     newSocket = (Socket*)malloc(sizeof(Socket));
     newSocket->destinationSocket = NULL;
     newSocket->bytesRead = NULL;
+    newSocket->bytesWritten = NULL;
     newSocket->readSize = 0;
+    newSocket->writeSize = 0;
     newSocket->nextSocket = NULL;
     newSocket->type = type;
     newSocket->id = socketId;
@@ -150,59 +154,58 @@ int getHostFromHeaders(char *headers, char **hostName, int *port)
     return 0;
 }
 
-int readyForServer(Socket *clientSocket)
+int connectToServer(Socket *clientSocket)
 {
-    fprintf (stderr, "Header dump: '%s'\n", clientSocket->bytesRead);
-    if(clientSocket->destinationSocket == NULL)
+    struct sockaddr_in name;
+    char *hostName;
+    int port;
+    int server;
+    Socket *serverSocket;
+    
+    if(getHostFromHeaders(clientSocket->bytesRead, &hostName, &port) < 0)
     {
-        struct sockaddr_in name;
-        char *hostName;
-        int port;
-        int server;
-        Socket *serverSocket;
-        
-        if(getHostFromHeaders(clientSocket->bytesRead, &hostName, &port) < 0)
-        {
-            fprintf(stderr, "Cannot get hostname from headers.");
-            return -1;
-        }
-        
-        server = socket (PF_INET, SOCK_STREAM, 0);
-        if(server < 0)
-        {
-            fprintf(stderr, "Cannot create client socket.");
-            return -1;
-        }
-        if(getHostAddr(&name, hostName, port) < 0)
-        {
-            fprintf(stderr, "Cannot get host address from host name: %s and port: %d.", hostName, port);
-            return -1;
-        }
-        if (connect (server, (struct sockaddr *) &name, sizeof (name)) < 0)
-        {
-            fprintf(stderr, "Cannot connect to server: %s on port: %d.", hostName, port);
-            return -1;
-        }
-        
-        serverSocket = addSocket(server, ServerSocket);
-        
-        //Associate with client
-        clientSocket->destinationSocket = serverSocket;
-        serverSocket->destinationSocket = clientSocket;
-        
-        //Allow socket to be read
-        FD_SET (serverSocket->id, &readSet);
-        
-        free(hostName);
+        fprintf(stderr, "Cannot get hostname from headers.");
+        return -1;
     }
     
+    server = socket (PF_INET, SOCK_STREAM, 0);
+    if(server < 0)
+    {
+        fprintf(stderr, "Cannot create client socket.");
+        return -1;
+    }
+    if(getHostAddr(&name, hostName, port) < 0)
+    {
+        fprintf(stderr, "Cannot get host address from host name: %s and port: %d.", hostName, port);
+        return -1;
+    }
+    if (connect (server, (struct sockaddr *) &name, sizeof (name)) < 0)
+    {
+        fprintf(stderr, "Cannot connect to server: %s on port: %d.", hostName, port);
+        return -1;
+    }
+    
+    serverSocket = addSocket(server, ServerSocket);
+    
+    //Associate with client
+    clientSocket->destinationSocket = serverSocket;
+    serverSocket->destinationSocket = clientSocket;
+    
+    //Allow socket to be read
+    FD_SET (serverSocket->id, &readSet);
+    
+    // Stop reading client socket
+    //FD_CLR (clientSocket->id, &readSet);
+    
+    free(hostName);
+    
     // Socket is ready to be written to
-    clientSocket->readSize = strlen(clientSocket->bytesRead); // This allows checking to see if socket is ready
-    FD_SET(clientSocket->destinationSocket->id, &writeSet);
+    //clientSocket->readSize = strlen(clientSocket->bytesRead); // This allows checking to see if socket is ready
+    //FD_SET(clientSocket->destinationSocket->id, &writeSet);
     return 0;
 }
 
-int readClient (Socket *client)
+int readSocket (Socket *socket)
 {
     // parse input
     // if done with parseing
@@ -213,7 +216,7 @@ int readClient (Socket *client)
     char *buffer = (char*)malloc(BUFFER_SIZE);
     ssize_t count;
     
-    count = recv(client->id, buffer, BUFFER_SIZE, 0);
+    count = recv(socket->id, buffer, BUFFER_SIZE, 0);
     if (count < 0) // error
     {
         // set server socket ready to write
@@ -231,21 +234,53 @@ int readClient (Socket *client)
     }
     else
     {
+        // if bytes are written, we can release old memory and malloc new memory
+        // if not yet written, add on to the memory block
         // resize the bytesRead array, but if it's null just alloc. Don't forget to make room for the trailing null byte
-        client->bytesRead = realloc(client->bytesRead, (client->bytesRead ? strlen(client->bytesRead) : 0) + strlen(buffer) + sizeof(char));
-        strncat(client->bytesRead, buffer, count); // use count to make sure garbage data isn't copied
+        if(socket->writeSize >= socket->readSize)
+        {
+            free(socket->bytesRead);
+            socket->bytesRead = NULL;
+            socket->readSize = 0;
+            socket->bytesWritten = NULL;
+            socket->writeSize = 0;
+        }
+        socket->bytesRead = realloc(socket->bytesRead, (socket->bytesRead ? strlen(socket->bytesRead) : 0) + strlen(buffer) + sizeof(char));
+        if(socket->readSize == 0)
+            *socket->bytesRead = '\0'; // Reset the buffer
+        socket->readSize += count;
+        strncat(socket->bytesRead, buffer, count); // use count to make sure garbage data isn't copied
         free(buffer);
-        if(count < BUFFER_SIZE){
-            // set server socket ready to write
-            return readyForServer(client);
+        if(socket->type == ClientSocket)
+        {
+            if(count < BUFFER_SIZE)
+            {
+                // set server socket ready to write
+                if(socket->destinationSocket == NULL)
+                {
+                    if(connectToServer(socket) < 0) // todo fix case when count = buffer_size
+                    {
+                        return -1;
+                    }
+                }
+                
+                FD_SET(socket->destinationSocket->id, &writeSet); // we can write to it
+            }
+            
+            return 0;
+        }
+        // server sockets
+        if(socket->destinationSocket != NULL)
+        {
+            FD_SET(socket->destinationSocket->id, &writeSet); // we can write to it
         }
         //fprintf (stderr, "Server: got message: '%s'\n", buffer);
-        return 0;
     }
     
     return 0;
 }
 
+/*
 int readServer (Socket *server)
 {
     // read data to buffer
@@ -268,16 +303,18 @@ int readServer (Socket *server)
     else
     {
         FD_SET(server->destinationSocket->id, &writeSet);
+        FD_CLR(server->id, &readSet);
     }
     
     return 0;
 }
+*/
 
-int writeSocketFromDestination (Socket *socket)
+int writeSocket (Socket *socket)
 {
     // write buffer to socket
     // remove self from write set
-    size_t bytesWritten;
+    size_t count;
     if(socket->destinationSocket == NULL)
     {
         return -1;
@@ -286,9 +323,25 @@ int writeSocketFromDestination (Socket *socket)
     {
         return 0;
     }
-    bytesWritten = send(socket->id, socket->destinationSocket->bytesRead, socket->destinationSocket->readSize, 0);
-    socket->readSize = 0;
-    FD_CLR(socket->id, &writeSet);
+    else if(socket->writeSize >= socket->readSize)
+    {
+        return -1;
+    }
+    if(socket->destinationSocket->bytesWritten == 0)
+    {
+        socket->destinationSocket->bytesWritten = socket->destinationSocket->bytesRead;
+    }
+    count = send(socket->id, socket->destinationSocket->bytesWritten, socket->destinationSocket->readSize - socket->destinationSocket->writeSize, 0);
+    socket->destinationSocket->bytesWritten += count;
+    socket->destinationSocket->writeSize += count;
+    
+    //socket->destinationSocket->readSize = 0;
+    
+    if(socket->destinationSocket->writeSize >= socket->destinationSocket->readSize) // we read everything we can
+        FD_CLR(socket->id, &writeSet);
+    else
+        FD_SET(socket->id, &writeSet); // TODO: Find out if this can be removed
+    //FD_SET (socket->destinationSocket->id, &readSet);
     return 0;
 }
 
@@ -394,46 +447,31 @@ int main (void)
                     break;
                     // TODO: bug! If this break isn't here, program will infinite loop when too many clients try to connect at once
                 }
-                else if (currentSocket->type == ClientSocket)
+                else
                 {
-                    if (readClient (currentSocket) < 0)
+                    if (readSocket (currentSocket) < 0)
                     {
-                        fprintf (stderr, "Closing client socket.");
-                        close (currentSocket->id); // close connection
-                        FD_CLR (currentSocket->id, &readSet);
-                        FD_CLR (currentSocket->id, &writeSet);
-                        if(currentSocket->destinationSocket != NULL && currentSocket->destinationSocket->type == ServerSocket)
+                        if(currentSocket->writeSize >= currentSocket->readSize) // make sure everything's written
                         {
-                            FD_CLR (currentSocket->destinationSocket->id, &writeSet);
-                            currentSocket->destinationSocket->destinationSocket = NULL;
+                            fprintf (stderr, "Closing socket.");
+                            close (currentSocket->id); // close connection
+                            FD_CLR (currentSocket->id, &readSet);
+                            FD_CLR (currentSocket->id, &writeSet);
+                            if(currentSocket->destinationSocket != NULL)
+                            {
+                                FD_CLR (currentSocket->destinationSocket->id, &writeSet);
+                                currentSocket->destinationSocket->destinationSocket = NULL;
+                            }
+                            removeSocket(currentSocket);
+                            currentSocket = NULL;
+                            break; // it's easier to lose some speed than try to free the pointer elsewhere
                         }
-                        removeSocket(currentSocket);
-                        currentSocket = NULL;
-                        break; // it's easier to lose some speed than try to free the pointer elsewhere
-                    }
-                }
-                else if (currentSocket->type == ServerSocket)
-                {
-                    if (readServer (currentSocket) < 0)
-                    {
-                        fprintf (stderr, "Closing server socket.");
-                        close (currentSocket->id); // close connection
-                        FD_CLR (currentSocket->id, &readSet);
-                        FD_CLR (currentSocket->id, &writeSet);
-                        if(currentSocket->destinationSocket != NULL && currentSocket->destinationSocket->type == ClientSocket)
-                        {
-                            FD_CLR (currentSocket->destinationSocket->id, &writeSet);
-                            currentSocket->destinationSocket->destinationSocket = NULL;
-                        }
-                        removeSocket(currentSocket);
-                        currentSocket = NULL;
-                        break; // it's easier to lose some speed than try to free the pointer elsewhere
                     }
                 }
             }
             if (FD_ISSET (currentSocket->id, &writeSet)) // the socket can be written
             {
-                if (writeSocketFromDestination (currentSocket) < 0)
+                if (writeSocket (currentSocket) < 0)
                 {
                     
                 }
