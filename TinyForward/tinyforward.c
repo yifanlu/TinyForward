@@ -23,7 +23,7 @@
 
 #define HOST    "0.0.0.0"
 #define PORT    5560
-#define BUFFER_SIZE  1024
+#define BUFFER_SIZE  10
 
 typedef enum {
     ClientSocket,
@@ -273,6 +273,45 @@ Socket *connect_to_server(struct sockaddr_in *name)
     return add_socket(server_id, ServerSocket);
 }
 
+int reconnect(Socket *sock)
+{
+    int new_id;
+    int old_id;
+    
+    old_id = sock->id;
+    close(sock->id);
+    if((new_id = socket (PF_INET, SOCK_STREAM, 0)) < 0)
+    {
+        return -1;
+    }
+    
+    sock->id = new_id;
+    
+    if(connect (new_id, (struct sockaddr *) &sock->name, sizeof (struct sockaddr)) < 0)
+    {
+        fprintf(stderr, "Cannot reconnect!\n");
+        return -1;
+    }
+    
+    if(FD_ISSET(old_id, &master_set))
+    {
+        FD_CLR(old_id, &master_set);
+        FD_SET(new_id, &master_set);
+    }
+    if(FD_ISSET(old_id, &read_set))
+    {
+        FD_CLR(old_id, &read_set);
+        FD_SET(new_id, &read_set);
+    }
+    if(FD_ISSET(old_id, &write_set))
+    {
+        FD_CLR(old_id, &write_set);
+        FD_SET(new_id, &write_set);
+    }
+    
+    return 0;
+}
+
 int create_connection(Socket *client)
 {
     char *host_name;
@@ -296,7 +335,7 @@ int create_connection(Socket *client)
     
     if(client->connected_socket != NULL)
     {
-        if(compare_host_addr(&name, &client->name) == 0)
+        if(compare_host_addr(&name, &client->connected_socket->name) == 0) // We are reusing this socket
         {
             return 0;
         }
@@ -478,6 +517,16 @@ int main (int argc, const char * argv[])
                             temp.next_socket = close_connection(current); // so the loop can continue
                             current = &temp; // so we can still manage the next socket
                         }
+                        else if(current->type == ServerSocket)
+                        {
+                            if(reconnect(current) < 0)
+                            {
+                            }
+                            else
+                            {
+                                fprintf(stderr, "Reconnected to server.\n");
+                            }
+                        }
                     }
                 }
             }
@@ -492,6 +541,16 @@ int main (int argc, const char * argv[])
                         temp.id = -1;
                         temp.next_socket = close_connection(current); // so the loop can continue
                         current = &temp; // so we can still manage the next socket
+                    }
+                    else if(current->type == ServerSocket)
+                    {
+                        if(reconnect(current) < 0)
+                        {
+                        }
+                        else
+                        {
+                            fprintf(stderr, "Reconnected to server.\n");
+                        }
                     }
                 }
             }
