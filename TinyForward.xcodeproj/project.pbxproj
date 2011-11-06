@@ -25,6 +25,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		CEB8882414672956001FDEB1 /* tinyforward.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = tinyforward.h; sourceTree = "<group>"; };
 		CEE4224714536669005E216E /* TinyForward */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = TinyForward; sourceTree = BUILT_PRODUCTS_DIR; };
 		CEE4224B14536669005E216E /* tinyforward.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = tinyforward.c; sourceTree = "<group>"; };
 		CEE4224D14536669005E216E /* TinyForward.1 */ = {isa = PBXFileReference; lastKnownFileType = text.man; path = TinyForward.1; sourceTree = "<group>"; };
@@ -61,6 +62,7 @@
 			isa = PBXGroup;
 			children = (
 				CEE4224B14536669005E216E /* tinyforward.c */,
+				CEB8882414672956001FDEB1 /* tinyforward.h */,
 				CEE4224D14536669005E216E /* TinyForward.1 */,
 			);
 			path = TinyForward;
@@ -200,6 +202,7 @@
 				CEE4225314536669005E216E /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
 	};

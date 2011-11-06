@@ -1,53 +1,155 @@
 //
-//  main.c
+//  tinyforward.c
 //  TinyForward
 //
-//  Created by Yifan Lu on 11/5/11.
-//  Copyright 2011 __MyCompanyName__. All rights reserved.
-//
+//  Copyright (C) 2011  Yifan Lu
+//  
+//  This program is free software: you can redistribute it and/or modify
+//  it under the terms of the GNU General Public License as published by
+//  the Free Software Foundation, either version 3 of the License, or
+//  (at your option) any later version.
+//  
+//  This program is distributed in the hope that it will be useful,
+//  but WITHOUT ANY WARRANTY; without even the implied warranty of
+//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+//  GNU General Public License for more details.
+//  
+//  You should have received a copy of the GNU General Public License
+//  along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <assert.h>
-#include <errno.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <sys/ioctl.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <netdb.h>
-#include <arpa/inet.h>
-#include <regex.h>
-
-#define HOST    "0.0.0.0"
-#define PORT    5560
-#define BUFFER_SIZE  10
-
-typedef enum {
-    ClientSocket,
-    ServerSocket,
-    ListenerSocket
-} SocketType;
-
-typedef struct ProxySocket Socket;
-
-struct ProxySocket {
-    Socket *prevous_socket;
-    SocketType type;
-    int id;
-    struct sockaddr_in name;
-    char *buffer;
-    long buffer_size;
-    Socket *connected_socket;
-    Socket *next_socket;
-};
-
-const char *error_return = "HTTP/1.1 500 Proxy Error\r\n\r\nProxy cannot process request.";
+#include "tinyforward.h"
 
 Socket *last_socket;
 fd_set master_set, read_set, write_set;
+
+int compare_host_addr(struct sockaddr_in *name1, struct sockaddr_in *name2)
+{
+    if(name1->sin_addr.s_addr != name2->sin_addr.s_addr)
+        return -1;
+    if(name1->sin_port != name2->sin_port)
+        return -1;
+    if(name1->sin_family != name2->sin_family)
+        return -1;
+    return 0;
+}
+
+int get_host_addr (struct sockaddr_in *name, const char *hostName, uint16_t port)
+{
+    struct hostent *hostinfo;
+    
+    name->sin_family = AF_INET;
+    name->sin_port = htons (port);
+    hostinfo = gethostbyname (hostName);
+    if (hostinfo == NULL)
+    {
+        return -1;
+    }
+    name->sin_addr = *(struct in_addr *) hostinfo->h_addr;
+    return 0;
+}
+
+int get_host_from_headers(char *headers, char **host_name, int *port)
+{
+    static size_t prefix_length = strlen("Host: ");
+    const char *host_header;
+    size_t length;
+    char *port_str;
+    
+    host_header = strcasestr(headers, "Host: ");
+    if(host_header == NULL)
+        return -1;
+    length = strcspn(host_header, "\r\n");
+    *host_name = (char *)malloc(length - prefix_length + 1); // room for null terminator
+    **host_name = '\0'; // so strncat will start at beginning
+    strncat(*host_name, host_header + prefix_length, length - prefix_length);
+    
+    *port = 80;
+    if(strchr(*host_name, ':') != NULL)
+    {
+        strtok (*host_name, ":"); // cut string at colon
+        port_str = strtok (NULL, ":"); // get port number
+        *port = atoi (port_str); // convert ASCII sting to number
+    }
+    
+    return 0;
+}
+
+/*
+int get_header_pos(char *buffer, regmatch_t *match)
+{
+    static regex_t regex; // no need to free it
+    static int compiled = 0;
+    regmatch_t pmatch[2];
+    
+    // host: "^Host: [A-Za-z0-9\\-\\.]+(:\\d+)?$"
+    if(compiled == 0)
+    {
+        if(regcomp(&regex, "^Host: [A-Za-z0-9\\-\\.]+(:\\d+)?$", REG_EXTENDED|REG_NOSUB) != 0)
+        {
+            fprintf(stderr, "Cannot compile regex for comparsion!\n");
+            return -1;
+        }
+        compiled = 1;
+    }
+    
+    if(regexec(&regex, buffer, 1, pmatch, 0) != 0)
+    {
+        return -1;
+    }
+    
+    *match = pmatch[1];
+    
+    return 1;
+}
+ */
+
+long is_request_complete(char *buffer)
+{
+    static size_t prefix_length = strlen("Content-length: ");
+    const char *content_length_header;
+    char *data;
+    size_t length;
+    size_t content_length;
+    
+    content_length_header = strcasestr(buffer, "Content-Length: ");
+    if(content_length_header != NULL)
+    {
+        length = strcspn(content_length_header + prefix_length, "\r\n");
+        if(length == strlen(content_length_header + prefix_length)) // returned entire string, no match
+        {
+            return -1;
+        }
+        char length_str[length+1];
+        memcpy(length_str, content_length_header + prefix_length, length);
+        length_str[length] = '\0'; // null terminate
+        content_length = atoi(length_str);
+    }
+    else
+    {
+        content_length = 0;
+    }
+    
+    data = strstr(buffer, "\r\n\r\n");
+    if(data == NULL)
+        return -1;
+    if(content_length == 0)
+    {
+        return 0;
+    }
+    else
+    {
+        if(strlen(data+4) >= content_length)
+        {
+            return content_length;
+        }
+        else
+        {
+            return -1;
+        }
+    }
+    
+    return 0;
+}
 
 Socket *add_socket(int socket_id, SocketType type)
 {
@@ -123,137 +225,6 @@ Socket *close_connection(Socket *socket) // returns the next socket
     return next;
 }
 
-int get_host_addr (struct sockaddr_in *name, const char *hostName, uint16_t port)
-{
-    struct hostent *hostinfo;
-    
-    name->sin_family = AF_INET;
-    name->sin_port = htons (port);
-    hostinfo = gethostbyname (hostName);
-    if (hostinfo == NULL)
-    {
-        return -1;
-    }
-    name->sin_addr = *(struct in_addr *) hostinfo->h_addr;
-    return 0;
-}
-
-int compare_host_addr(struct sockaddr_in *name1, struct sockaddr_in *name2)
-{
-    if(name1->sin_addr.s_addr != name2->sin_addr.s_addr)
-        return -1;
-    if(name1->sin_port != name2->sin_port)
-        return -1;
-    if(name1->sin_family != name2->sin_family)
-        return -1;
-    return 0;
-}
-
-int get_host_from_headers(char *headers, char **host_name, int *port)
-{
-    static size_t prefix_length = strlen("Host: ");
-    const char *host_header;
-    size_t length;
-    char *port_str;
-    
-    host_header = strcasestr(headers, "Host: ");
-    if(host_header == NULL)
-        return -1;
-    length = strcspn(host_header, "\r\n");
-    *host_name = (char *)malloc(length - prefix_length + 1); // room for null terminator
-    **host_name = '\0'; // so strncat will start at beginning
-    strncat(*host_name, host_header + prefix_length, length - prefix_length);
-    
-    *port = 80;
-    if(strchr(*host_name, ':') != NULL)
-    {
-        strtok (*host_name, ":"); // cut string at colon
-        port_str = strtok (NULL, ":"); // get port number
-        *port = atoi (port_str); // convert ASCII sting to number
-    }
-    
-    return 0;
-}
-
-int get_header_pos(char *buffer, regmatch_t *match)
-{
-    static regex_t regex; // no need to free it
-    static int compiled = 0;
-    regmatch_t pmatch[2];
-    
-    // host: "^Host: [A-Za-z0-9\\-\\.]+(:\\d+)?$"
-    if(compiled == 0)
-    {
-        if(regcomp(&regex, "^Host: [A-Za-z0-9\\-\\.]+(:\\d+)?$", REG_EXTENDED|REG_NOSUB) != 0)
-        {
-            fprintf(stderr, "Cannot compile regex for comparsion!\n");
-            return -1;
-        }
-        compiled = 1;
-    }
-    
-    if(regexec(&regex, buffer, 1, pmatch, 0) != 0)
-    {
-        return -1;
-    }
-    
-    *match = pmatch[1];
-    
-    return 1;
-}
-
-long is_request_complete(char *buffer)
-{
-    static size_t prefix_length = strlen("Content-length: ");
-    const char *content_length_header;
-    char *data;
-    size_t length;
-    size_t content_length;
-    
-    content_length_header = strcasestr(buffer, "Content-Length: ");
-    if(content_length_header != NULL)
-    {
-        length = strcspn(content_length_header + prefix_length, "\r\n");
-        if(length == strlen(content_length_header + prefix_length)) // returned entire string, no match
-        {
-            return -1;
-        }
-        char length_str[length+1];
-        memcpy(length_str, content_length_header + prefix_length, length);
-        length_str[length] = '\0'; // null terminate
-        content_length = atoi(length_str);
-    }
-    else
-    {
-        content_length = 0;
-    }
-    
-    data = strstr(buffer, "\r\n\r\n");
-    if(data == NULL)
-        return -1;
-    if(content_length == 0)
-    {
-        return 0;
-    }
-    else
-    {
-        fprintf(stderr, "Content: %s\n", data+4);
-        if(strlen(data+4) >= content_length)
-        {
-            
-            fprintf(stderr, "Content-Length: %lu\n", content_length);
-            return content_length;
-        }
-        else
-        {
-            return -1;
-        }
-    }
-    
-    return 0;
-    
-}
-
 Socket *connect_to_server(struct sockaddr_in *name)
 {
     int server_id;
@@ -271,45 +242,6 @@ Socket *connect_to_server(struct sockaddr_in *name)
     }
     
     return add_socket(server_id, ServerSocket);
-}
-
-int reconnect(Socket *sock)
-{
-    int new_id;
-    int old_id;
-    
-    old_id = sock->id;
-    close(sock->id);
-    if((new_id = socket (PF_INET, SOCK_STREAM, 0)) < 0)
-    {
-        return -1;
-    }
-    
-    sock->id = new_id;
-    
-    if(connect (new_id, (struct sockaddr *) &sock->name, sizeof (struct sockaddr)) < 0)
-    {
-        fprintf(stderr, "Cannot reconnect!\n");
-        return -1;
-    }
-    
-    if(FD_ISSET(old_id, &master_set))
-    {
-        FD_CLR(old_id, &master_set);
-        FD_SET(new_id, &master_set);
-    }
-    if(FD_ISSET(old_id, &read_set))
-    {
-        FD_CLR(old_id, &read_set);
-        FD_SET(new_id, &read_set);
-    }
-    if(FD_ISSET(old_id, &write_set))
-    {
-        FD_CLR(old_id, &write_set);
-        FD_SET(new_id, &write_set);
-    }
-    
-    return 0;
 }
 
 int create_connection(Socket *client)
@@ -361,6 +293,45 @@ int create_connection(Socket *client)
     
     //Allow socket to be read
     FD_SET (server->id, &master_set);
+    
+    return 0;
+}
+
+int reconnect(Socket *sock)
+{
+    int new_id;
+    int old_id;
+    
+    old_id = sock->id;
+    close(sock->id);
+    if((new_id = socket (PF_INET, SOCK_STREAM, 0)) < 0)
+    {
+        return -1;
+    }
+    
+    sock->id = new_id;
+    
+    if(connect (new_id, (struct sockaddr *) &sock->name, sizeof (struct sockaddr)) < 0)
+    {
+        fprintf(stderr, "Cannot reconnect!\n");
+        return -1;
+    }
+    
+    if(FD_ISSET(old_id, &master_set))
+    {
+        FD_CLR(old_id, &master_set);
+        FD_SET(new_id, &master_set);
+    }
+    if(FD_ISSET(old_id, &read_set))
+    {
+        FD_CLR(old_id, &read_set);
+        FD_SET(new_id, &read_set);
+    }
+    if(FD_ISSET(old_id, &write_set))
+    {
+        FD_CLR(old_id, &write_set);
+        FD_SET(new_id, &write_set);
+    }
     
     return 0;
 }
