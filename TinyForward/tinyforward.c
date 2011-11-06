@@ -105,7 +105,7 @@ int get_header_pos(char *buffer, regmatch_t *match)
 
 long is_request_complete(char *buffer, long buffer_size)
 {
-    static size_t prefix_length = strlen("Content-length: ");
+    static size_t prefix_length = strlen("Content-Length: ");
     const char *content_length_header;
     char *data;
     size_t length;
@@ -155,8 +155,6 @@ long is_request_complete(char *buffer, long buffer_size)
 
 Socket *add_socket(int socket_id, SocketType type)
 {
-    static int open = 0;
-    fprintf(stderr, "Open sockets: %d\n", ++open);
     Socket *new_socket;
     new_socket = (Socket*)malloc(sizeof(Socket));
     new_socket->type = type;
@@ -177,8 +175,6 @@ Socket *add_socket(int socket_id, SocketType type)
 
 void remove_socket(Socket *socket)
 {
-    static int close = 0;
-    fprintf(stderr, "Closed sockets: %d\n", ++close);
     // remove from linked list
     socket->prevous_socket->next_socket = socket->next_socket;
     if(socket->next_socket != NULL)
@@ -196,12 +192,11 @@ Socket *accept_connection(Socket *listener)
     new_client = accept (listener->id, NULL, NULL);
     if (new_client < 0)
     {
-        fprintf(stderr, "Error: %d", errno);
-        perror ("accept");
-        exit (EXIT_FAILURE);
+        fprintf(stderr, "Error accepting new connection: socket error %d\n", errno);
+        return NULL;
     }
     
-    fprintf (stderr, "New connection.");
+    fprintf (stdout, "New connection.\n");
     FD_SET (new_client, &master_set);
     
     return add_socket(new_client, ClientSocket);
@@ -210,7 +205,7 @@ Socket *accept_connection(Socket *listener)
 Socket *close_connection(Socket *socket) // returns the next socket
 {
     Socket *next;
-    fprintf (stderr, "Closing socket.");
+    fprintf (stdout, "Closing socket.\n");
     close (socket->id); // close connection
     next = socket->next_socket; // get the next socket
     FD_CLR (socket->id, &master_set);
@@ -234,12 +229,12 @@ Socket *connect_to_server(struct sockaddr_in *name)
     server_id = socket (PF_INET, SOCK_STREAM, 0);
     if(server_id < 0)
     {
-        fprintf(stderr, "Cannot create client socket.");
+        fprintf(stderr, "Cannot create client socket.\n");
         return NULL;
     }
     if (connect (server_id, (struct sockaddr *) name, sizeof (struct sockaddr)) < 0)
     {
-        fprintf(stderr, "Cannot connect to server.");
+        fprintf(stderr, "Cannot connect to server.\n");
         return NULL;
     }
     
@@ -259,9 +254,11 @@ int create_connection(Socket *client)
         return -1;
     }
     
+    fprintf(stdout, "Connecting to %s on port %d.\n", host_name, port);
+    
     if(get_host_addr(&name, host_name, port) < 0)
     {
-        fprintf(stderr, "Cannot get host address from host name: %s and port: %d.", host_name, port);
+        fprintf(stderr, "Cannot get host address from host name: %s and port: %d.\n", host_name, port);
         return -1;
     }
     
@@ -308,6 +305,7 @@ int reconnect(Socket *sock)
     close(sock->id);
     if((new_id = socket (PF_INET, SOCK_STREAM, 0)) < 0)
     {
+        fprintf(stderr, "Error creating socket. Cannot reconnect!\n");
         return -1;
     }
     
@@ -315,7 +313,7 @@ int reconnect(Socket *sock)
     
     if(connect (new_id, (struct sockaddr *) &sock->name, sizeof (struct sockaddr)) < 0)
     {
-        fprintf(stderr, "Cannot reconnect!\n");
+        fprintf(stderr, "Error connecting socket. Cannot reconnect!\n");
         return -1;
     }
     
@@ -352,10 +350,12 @@ int read_socket(Socket *socket)
     
     if (count < 0) // error
     {
+        fprintf(stderr, "Error reading socket!\n");
         return -1;
     }
     else if (count == 0) // read no bytes == socket closed from other side
     {
+        fprintf(stdout, "Client closed socket.\n");
         return -1;
     }
     else
@@ -365,6 +365,7 @@ int read_socket(Socket *socket)
             // check for Content-Length field and/or \r\n\r\n
             if(is_request_complete(socket->buffer, socket->buffer_size) >= 0)
             {
+                fprintf(stdout, "Request header:\n%.*s\n", (int)socket->buffer_size, socket->buffer);
                 if(create_connection(socket) != 0)
                 {
                     return -1;
@@ -477,7 +478,10 @@ int main (int argc, const char * argv[])
                 FD_CLR(current->id, &read_set);
                 if(current->type == ListenerSocket)
                 {
-                    accept_connection(listener);
+                    if(accept_connection(listener) == NULL)
+                    {
+                        // TODO: Error handling
+                    }
                 }
                 else
                 {
@@ -499,15 +503,6 @@ int main (int argc, const char * argv[])
                             current->connected_socket = NULL;
                             temp.next_socket = close_connection(current); // so the loop can continue
                             current = &temp; // so we can still manage the next socket
-                            /*
-                            if(reconnect(current) < 0)
-                            {
-                            }
-                            else
-                            {
-                                fprintf(stderr, "Reconnected to server.\n");
-                            }
-                             */
                         }
                     }
                 }
@@ -528,10 +523,7 @@ int main (int argc, const char * argv[])
                     {
                         if(reconnect(current) < 0)
                         {
-                        }
-                        else
-                        {
-                            fprintf(stderr, "Reconnected to server.\n");
+                            // TODO: Error handling
                         }
                     }
                 }
