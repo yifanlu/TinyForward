@@ -23,7 +23,7 @@
 
 #define HOST    "0.0.0.0"
 #define PORT    5560
-#define BUFFER_SIZE  10
+#define BUFFER_SIZE  1024
 
 typedef enum {
     ClientSocket,
@@ -37,7 +37,9 @@ struct ProxySocket {
     Socket *prevous_socket;
     SocketType type;
     int id;
+    struct sockaddr_in name;
     char *buffer;
+    long buffer_size;
     Socket *connected_socket;
     Socket *next_socket;
 };
@@ -56,7 +58,8 @@ Socket *add_socket(int socket_id, SocketType type)
     new_socket->type = type;
     new_socket->id = socket_id;
     new_socket->buffer = (char*)malloc(BUFFER_SIZE);
-    new_socket->buffer[0] = '\0'; // strlen == 0
+    //new_socket->buffer[0] = '\0'; // strlen == 0
+    new_socket->buffer_size = 0;
     new_socket->connected_socket = NULL;
     new_socket->next_socket = NULL;
     
@@ -82,6 +85,44 @@ void remove_socket(Socket *socket)
     free(socket);
 }
 
+
+Socket *accept_connection(Socket *listener)
+{
+    int new_client;
+    new_client = accept (listener->id, NULL, NULL);
+    if (new_client < 0)
+    {
+        fprintf(stderr, "Error: %d", errno);
+        perror ("accept");
+        exit (EXIT_FAILURE);
+    }
+    
+    fprintf (stderr, "New connection.");
+    FD_SET (new_client, &master_set);
+    
+    return add_socket(new_client, ClientSocket);
+}
+
+Socket *close_connection(Socket *socket) // returns the next socket
+{
+    Socket *next;
+    fprintf (stderr, "Closing socket.");
+    close (socket->id); // close connection
+    next = socket->next_socket; // get the next socket
+    FD_CLR (socket->id, &master_set);
+    FD_CLR (socket->id, &read_set);
+    FD_CLR (socket->id, &write_set);
+    if(socket->connected_socket != NULL)
+    {
+        if(next == socket->connected_socket)
+            next = socket->connected_socket->next_socket;
+        socket->connected_socket->connected_socket = NULL;
+        close_connection(socket->connected_socket);
+    }
+    remove_socket(socket);
+    return next;
+}
+
 int get_host_addr (struct sockaddr_in *name, const char *hostName, uint16_t port)
 {
     struct hostent *hostinfo;
@@ -97,6 +138,17 @@ int get_host_addr (struct sockaddr_in *name, const char *hostName, uint16_t port
     return 0;
 }
 
+int compare_host_addr(struct sockaddr_in *name1, struct sockaddr_in *name2)
+{
+    if(name1->sin_addr.s_addr != name2->sin_addr.s_addr)
+        return -1;
+    if(name1->sin_port != name2->sin_port)
+        return -1;
+    if(name1->sin_family != name2->sin_family)
+        return -1;
+    return 0;
+}
+
 int get_host_from_headers(char *headers, char **host_name, int *port)
 {
     static size_t prefix_length = strlen("Host: ");
@@ -104,7 +156,7 @@ int get_host_from_headers(char *headers, char **host_name, int *port)
     size_t length;
     char *port_str;
     
-    host_header = strstr(headers, "Host: ");
+    host_header = strcasestr(headers, "Host: ");
     if(host_header == NULL)
         return -1;
     length = strcspn(host_header, "\r\n");
@@ -158,7 +210,7 @@ long is_request_complete(char *buffer)
     size_t length;
     size_t content_length;
     
-    content_length_header = strstr(buffer, "Content-length: ");
+    content_length_header = strcasestr(buffer, "Content-Length: ");
     if(content_length_header != NULL)
     {
         length = strcspn(content_length_header + prefix_length, "\r\n");
@@ -176,25 +228,20 @@ long is_request_complete(char *buffer)
         content_length = 0;
     }
     
-    fprintf(stderr, "Content-Length: %lu\n", content_length);
-    
     data = strstr(buffer, "\r\n\r\n");
+    if(data == NULL)
+        return -1;
     if(content_length == 0)
     {
-        if(data != NULL)
-        {
-            return 0;
-        }
-        else
-        {
-            return -1;
-        }
+        return 0;
     }
     else
     {
         fprintf(stderr, "Content: %s\n", data+4);
         if(strlen(data+4) >= content_length)
         {
+            
+            fprintf(stderr, "Content-Length: %lu\n", content_length);
             return content_length;
         }
         else
@@ -207,12 +254,30 @@ long is_request_complete(char *buffer)
     
 }
 
-int connect_to_server(Socket *client)
+Socket *connect_to_server(struct sockaddr_in *name)
 {
-    struct sockaddr_in name;
+    int server_id;
+    
+    server_id = socket (PF_INET, SOCK_STREAM, 0);
+    if(server_id < 0)
+    {
+        fprintf(stderr, "Cannot create client socket.");
+        return NULL;
+    }
+    if (connect (server_id, (struct sockaddr *) name, sizeof (struct sockaddr)) < 0)
+    {
+        fprintf(stderr, "Cannot connect to server.");
+        return NULL;
+    }
+    
+    return add_socket(server_id, ServerSocket);
+}
+
+int create_connection(Socket *client)
+{
     char *host_name;
     int port;
-    int server_id;
+    struct sockaddr_in name;
     Socket *server;
     
     if(get_host_from_headers(client->buffer, &host_name, &port) < 0)
@@ -221,55 +286,57 @@ int connect_to_server(Socket *client)
         return -1;
     }
     
-    server_id = socket (PF_INET, SOCK_STREAM, 0);
-    if(server < 0)
-    {
-        fprintf(stderr, "Cannot create client socket.");
-        return -1;
-    }
     if(get_host_addr(&name, host_name, port) < 0)
     {
         fprintf(stderr, "Cannot get host address from host name: %s and port: %d.", host_name, port);
         return -1;
     }
-    if (connect (server_id, (struct sockaddr *) &name, sizeof (name)) < 0)
+    
+    free(host_name); // no longer needed
+    
+    if(client->connected_socket != NULL)
     {
-        fprintf(stderr, "Cannot connect to server: %s on port: %d.", host_name, port);
-        return -1;
+        if(compare_host_addr(&name, &client->name) == 0)
+        {
+            return 0;
+        }
+        else
+        {
+            client->connected_socket->connected_socket = NULL;
+            close_connection(client->connected_socket);
+            client->connected_socket = NULL;
+        }
     }
     
-    server = add_socket(server_id, ServerSocket);
-    
+    if((server = connect_to_server(&name)) == NULL)
+    {
+        send(client->id, error_return, strlen(error_return), 0); // send response to client
+        return -1;
+    }
     //Associate with client
     client->connected_socket = server;
     server->connected_socket = client;
     
+    //Set name
+    server->name = name;
+    
     //Allow socket to be read
     FD_SET (server->id, &master_set);
     
-    // Stop reading client socket
-    //FD_CLR (clientSocket->id, &readSet);
-    
-    free(host_name);
-    
-    // Socket is ready to be written to
-    //clientSocket->readSize = strlen(clientSocket->bytesRead); // This allows checking to see if socket is ready
-    //FD_SET(clientSocket->destinationSocket->id, &writeSet);
     return 0;
 }
 
 int read_socket(Socket *socket)
 {
     char *buffer;
-    size_t buffer_len;
     ssize_t count;
     
-    buffer_len = strlen(socket->buffer); // could be zero
-    socket->buffer = realloc(socket->buffer, (buffer_len + BUFFER_SIZE) * sizeof(char)); // resize buffer in case the last set was not read yet
-    buffer = socket->buffer + buffer_len;
+    socket->buffer = realloc(socket->buffer, (socket->buffer_size + BUFFER_SIZE) * sizeof(char)); // resize buffer in case the last set was not read yet
+    buffer = socket->buffer + socket->buffer_size;
     
     count = recv(socket->id, buffer, BUFFER_SIZE - 1, 0); // make room for null terminator
     buffer[count] = '\0'; // null terminate
+    socket->buffer_size += count;
     
     if (count < 0) // error
     {
@@ -280,22 +347,25 @@ int read_socket(Socket *socket)
         return -1;
     }
     else
-    {
+    {   
         if(socket->type == ClientSocket)
         {
             // check for Content-Length field and/or \r\n\r\n
             if(is_request_complete(socket->buffer) >= 0)
             {
-                if(connect_to_server(socket) < 0)
+                if(create_connection(socket) != 0)
                 {
-                    send(socket->id, error_return, strlen(error_return), 0); // send response to client
                     return -1;
                 }
             }
+            else
+            {
+                return 0;
+            }
         }
         
-        if(socket->connected_socket != NULL)
-            FD_SET(socket->connected_socket->id, &write_set); // Can write to connected socket
+        assert(socket->connected_socket != NULL);
+        FD_SET(socket->connected_socket->id, &write_set); // Can write to connected socket
     }
     
     return 0;
@@ -306,8 +376,9 @@ int write_socket(Socket *socket)
     assert(socket->connected_socket != NULL); // Shouldn't be null or we won't be here
     ssize_t count;
     
-    count = send(socket->id, socket->connected_socket->buffer, strlen(socket->connected_socket->buffer), 0);
-    socket->connected_socket->buffer[0] = '\0'; // Reset buffer, strlen == 0
+    count = send(socket->id, socket->connected_socket->buffer, socket->connected_socket->buffer_size, 0);
+    //socket->connected_socket->buffer[0] = '\0'; // Reset buffer, strlen == 0
+    socket->connected_socket->buffer_size = 0;
     
     if(count < 0) // error
     {
@@ -347,43 +418,6 @@ int create_listener_socket (const char *host, uint16_t port)
     return sock;
 }
 
-Socket *accept_connection(Socket *listener)
-{
-    int new_client;
-    new_client = accept (listener->id, NULL, NULL);
-    if (new_client < 0)
-    {
-        fprintf(stderr, "Error: %d", errno);
-        perror ("accept");
-        exit (EXIT_FAILURE);
-    }
-    
-    fprintf (stderr, "New connection.");
-    FD_SET (new_client, &master_set);
-    
-    return add_socket(new_client, ClientSocket);
-}
-
-Socket *close_connection(Socket *socket) // returns the next socket
-{
-    Socket *next;
-    fprintf (stderr, "Closing socket.");
-    close (socket->id); // close connection
-    next = socket->next_socket; // get the next socket
-    FD_CLR (socket->id, &master_set);
-    FD_CLR (socket->id, &read_set);
-    FD_CLR (socket->id, &write_set);
-    if(socket->connected_socket != NULL)
-    {
-        if(next == socket->connected_socket)
-            next = socket->connected_socket->next_socket;
-        socket->connected_socket->connected_socket = NULL;
-        close_connection(socket->connected_socket);
-    }
-    remove_socket(socket);
-    return next;
-}
-
 int main (int argc, const char * argv[])
 {
     Socket *listener;
@@ -393,6 +427,7 @@ int main (int argc, const char * argv[])
     listener->type = ListenerSocket;
     listener->id = create_listener_socket (HOST, PORT);
     listener->buffer = NULL;
+    listener->buffer_size = 0;
     listener->connected_socket = NULL;
     listener->prevous_socket = NULL;
     listener->next_socket = NULL;
@@ -425,7 +460,7 @@ int main (int argc, const char * argv[])
         
         for (current = listener; current != NULL; current = current->next_socket)
         {
-            if (FD_ISSET (current->id, &read_set)) // the socket can be read
+            if (current->id > -1 && FD_ISSET (current->id, &read_set)) // the socket can be read
             {
                 FD_CLR(current->id, &read_set);
                 if(current->type == ListenerSocket)
@@ -446,7 +481,7 @@ int main (int argc, const char * argv[])
                     }
                 }
             }
-            if (FD_ISSET (current->id, &write_set)) // the socket can be written
+            if (current->id > -1 && FD_ISSET (current->id, &write_set)) // the socket can be written
             {
                 FD_CLR(current->id, &write_set);
                 if (write_socket (current) < 0)
