@@ -42,6 +42,8 @@ struct ProxySocket {
     Socket *next_socket;
 };
 
+const char *error_return = "HTTP/1.1 500 Proxy Error\r\n\r\nProxy cannot process request.";
+
 Socket *last_socket;
 fd_set master_set, read_set, write_set;
 
@@ -148,7 +150,7 @@ int get_header_pos(char *buffer, regmatch_t *match)
     return 1;
 }
 
-int is_request_complete(char *buffer)
+long is_request_complete(char *buffer)
 {
     static size_t prefix_length = strlen("Content-length: ");
     const char *content_length_header;
@@ -174,7 +176,7 @@ int is_request_complete(char *buffer)
         content_length = 0;
     }
     
-    fprintf(stderr, "Content-Length: %d\n", content_length);
+    fprintf(stderr, "Content-Length: %lu\n", content_length);
     
     data = strstr(buffer, "\r\n\r\n");
     if(content_length == 0)
@@ -266,7 +268,7 @@ int read_socket(Socket *socket)
     socket->buffer = realloc(socket->buffer, (buffer_len + BUFFER_SIZE) * sizeof(char)); // resize buffer in case the last set was not read yet
     buffer = socket->buffer + buffer_len;
     
-    count = recv(socket->id, buffer, BUFFER_SIZE, 0);
+    count = recv(socket->id, buffer, BUFFER_SIZE - 1, 0); // make room for null terminator
     buffer[count] = '\0'; // null terminate
     
     if (count < 0) // error
@@ -286,7 +288,7 @@ int read_socket(Socket *socket)
             {
                 if(connect_to_server(socket) < 0)
                 {
-                    // send response to client
+                    send(socket->id, error_return, strlen(error_return), 0); // send response to client
                     return -1;
                 }
             }
