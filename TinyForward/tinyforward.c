@@ -103,13 +103,14 @@ int get_header_pos(char *buffer, regmatch_t *match)
 }
  */
 
-long is_request_complete(char *buffer)
+long is_request_complete(char *buffer, long buffer_size)
 {
     static size_t prefix_length = strlen("Content-length: ");
     const char *content_length_header;
     char *data;
     size_t length;
     size_t content_length;
+    long data_length;
     
     content_length_header = strcasestr(buffer, "Content-Length: ");
     if(content_length_header != NULL)
@@ -138,7 +139,8 @@ long is_request_complete(char *buffer)
     }
     else
     {
-        if(strlen(data+4) >= content_length)
+        data_length = buffer_size - ((data+4) - buffer); // how much data is read
+        if(data_length >= content_length)
         {
             return content_length;
         }
@@ -361,7 +363,7 @@ int read_socket(Socket *socket)
         if(socket->type == ClientSocket)
         {
             // check for Content-Length field and/or \r\n\r\n
-            if(is_request_complete(socket->buffer) >= 0)
+            if(is_request_complete(socket->buffer, socket->buffer_size) >= 0)
             {
                 if(create_connection(socket) != 0)
                 {
@@ -488,8 +490,16 @@ int main (int argc, const char * argv[])
                             temp.next_socket = close_connection(current); // so the loop can continue
                             current = &temp; // so we can still manage the next socket
                         }
-                        else if(current->type == ServerSocket)
+                        else if(current->type == ServerSocket && current->buffer_size == 0)
                         {
+                            Socket temp;
+                            temp.id = -1;
+                            assert(current->connected_socket != NULL);
+                            current->connected_socket->connected_socket = NULL;
+                            current->connected_socket = NULL;
+                            temp.next_socket = close_connection(current); // so the loop can continue
+                            current = &temp; // so we can still manage the next socket
+                            /*
                             if(reconnect(current) < 0)
                             {
                             }
@@ -497,6 +507,7 @@ int main (int argc, const char * argv[])
                             {
                                 fprintf(stderr, "Reconnected to server.\n");
                             }
+                             */
                         }
                     }
                 }

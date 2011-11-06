@@ -33,8 +33,8 @@
 #include <unistd.h>
 
 #define HOST    "0.0.0.0"
-#define PORT    5565
-#define BUFFER_SIZE  1024
+#define PORT    5555
+#define BUFFER_SIZE  10
 
 typedef enum {
     ClientSocket,
@@ -62,7 +62,7 @@ int compare_host_addr(struct sockaddr_in *, struct sockaddr_in *);
 int get_host_addr (struct sockaddr_in *, const char *, uint16_t);
 int get_host_from_headers(char *, char **, int *);
 //int get_header_pos(char *, regmatch_t *);
-long is_request_complete(char *);
+long is_request_complete(char *, long);
 
 /* Linked list functions */
 Socket *add_socket(int, SocketType);
