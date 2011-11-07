@@ -270,7 +270,7 @@ int create_connection(Socket *client)
         {
             return 0;
         }
-        else
+        else // seems like another socket will be created, destroy the old one
         {
             client->connected_socket->connected_socket = NULL;
             close_connection(client->connected_socket);
@@ -280,7 +280,6 @@ int create_connection(Socket *client)
     
     if((server = connect_to_server(&name)) == NULL)
     {
-        send(client->id, error_return, strlen(error_return), 0); // send response to client
         return -1;
     }
     //Associate with client
@@ -365,11 +364,14 @@ int read_socket(Socket *socket)
             // check for Content-Length field and/or \r\n\r\n
             if(is_request_complete(socket->buffer, socket->buffer_size) >= 0)
             {
-                fprintf(stdout, "Request header:\n%.*s\n", (int)socket->buffer_size, socket->buffer);
+                //fprintf(stdout, "Request header:\n%.*s\n", (int)socket->buffer_size, socket->buffer);
                 if(create_connection(socket) != 0)
                 {
+                    send(socket->id, error_return, strlen(error_return), 0); // send response to client
                     return -1;
                 }
+                
+                // TODO: Here, we modify the request headers.
             }
             else
             {
@@ -438,7 +440,7 @@ int main (int argc, const char * argv[])
     
     listener = (Socket*)malloc(sizeof(Socket));
     listener->type = ListenerSocket;
-    listener->id = create_listener_socket (HOST, PORT);
+    listener->id = create_listener_socket (HOST, atoi(PORT));
     listener->buffer = NULL;
     listener->buffer_size = 0;
     listener->connected_socket = NULL;
@@ -453,6 +455,8 @@ int main (int argc, const char * argv[])
         close (listener->id);
         exit (EXIT_FAILURE);
     }
+    
+    fprintf(stdout, "Started listening on %s port %s\n", HOST, PORT);
     
     FD_ZERO (&master_set);
     FD_ZERO (&read_set);

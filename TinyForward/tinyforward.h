@@ -33,7 +33,7 @@
 #include <unistd.h>
 
 #define HOST    "0.0.0.0"
-#define PORT    5555
+#define PORT    "5555"
 #define BUFFER_SIZE  10
 
 typedef enum {
@@ -55,7 +55,7 @@ struct ProxySocket {
     Socket *next_socket;
 };
 
-const char *error_return = "HTTP/1.1 500 Proxy Error\r\n\r\nProxy cannot process request.";
+const char *error_return = "HTTP/1.1 500 Proxy Error\r\n\r\nProxy cannot process request. Error connecting to server.";
 
 /* Helper functions */
 int compare_host_addr(struct sockaddr_in *, struct sockaddr_in *);
