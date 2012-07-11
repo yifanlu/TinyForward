@@ -34,52 +34,44 @@
 
 #define HOST    "0.0.0.0"
 #define PORT    "5555"
-#define BUFFER_SIZE  10
+#define MAX_BUFFER_SIZE  10240
 
-typedef enum {
-    ClientSocket,
-    ServerSocket,
-    ListenerSocket
-} SocketType;
+typedef struct connection connection_t;
 
-typedef struct ProxySocket Socket;
-
-struct ProxySocket {
-    Socket *prevous_socket;
-    SocketType type;
-    int id;
-    struct sockaddr_in name;
-    char *buffer;
-    long buffer_size;
-    Socket *connected_socket;
-    Socket *next_socket;
-};
+struct {
+    connection_t *previous_connection;
+    int client_socket;
+    int server_socket;
+    struct sockaddr_in server_addr;
+    unsigned char *request_buffer;
+    unsigned long request_size;
+    unsigned char *response_buffer;
+    unsigned long response_size;
+    connection_t *next_connection;
+} connection;
 
 const char *error_return = "HTTP/1.1 500 Proxy Error\r\n\r\nProxy cannot process request. Error connecting to server.";
 
 /* Helper functions */
-int compare_host_addr(struct sockaddr_in *, struct sockaddr_in *);
+inline int compare_host_addr(struct sockaddr_in *, struct sockaddr_in *);
 int get_host_addr (struct sockaddr_in *, const char *, uint16_t);
 int get_host_from_headers(char *, char **, int *);
-//int get_header_pos(char *, regmatch_t *);
 long is_request_complete(char *, long);
 
 /* Linked list functions */
-Socket *add_socket(int, SocketType);
-void remove_socket(Socket *);
+connection_t *add_connection(int socket);
+void remove_connection(connection_t *connection);
 
 /* Connecting clients */
-Socket *accept_connection(Socket *);
-Socket *close_connection(Socket *);
+connection_t *accept_client(int listener);
+void close_connection(int socket);
 
 /* Connecting servers */
-Socket *connect_to_server(struct sockaddr_in *);
-int create_connection(Socket *);
-int reconnect(Socket *);
+int connect_server(connection_t *connection);
 
 /* Sockets IO */
-int read_socket(Socket *);
-int write_socket(Socket *);
+ssize_t read_socket(int socket, unsigned char **p_buffer, unsigned long *p_size);
+ssize_t write_socket(int socket, unsigned char **p_buffer, unsigned long *p_size);
 
 /* Listening */
 int create_listener_socket (const char *, uint16_t);

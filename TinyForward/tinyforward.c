@@ -19,11 +19,10 @@
 
 #include "tinyforward.h"
 
-Socket *last_socket;
+connection_t *last_connection;
 fd_set master_set, read_set, write_set;
 
-int compare_host_addr(struct sockaddr_in *name1, struct sockaddr_in *name2)
-{
+inline int compare_host_addr(struct sockaddr_in *name1, struct sockaddr_in *name2){
     if(name1->sin_addr.s_addr != name2->sin_addr.s_addr)
         return -1;
     if(name1->sin_port != name2->sin_port)
@@ -33,23 +32,20 @@ int compare_host_addr(struct sockaddr_in *name1, struct sockaddr_in *name2)
     return 0;
 }
 
-int get_host_addr (struct sockaddr_in *name, const char *hostName, uint16_t port)
-{
+int get_host_addr(struct sockaddr_in *name, const char *hostName, uint16_t port){
     struct hostent *hostinfo;
     
     name->sin_family = AF_INET;
     name->sin_port = htons (port);
     hostinfo = gethostbyname (hostName);
-    if (hostinfo == NULL)
-    {
+    if (hostinfo == NULL){
         return -1;
     }
     name->sin_addr = *(struct in_addr *) hostinfo->h_addr;
     return 0;
 }
 
-int get_host_from_headers(char *headers, char **host_name, int *port)
-{
+int get_host_from_headers(char *headers, char **host_name, unsigned short *port){
     static size_t prefix_length = strlen("Host: ");
     const char *host_header;
     size_t length;
@@ -64,8 +60,7 @@ int get_host_from_headers(char *headers, char **host_name, int *port)
     strncat(*host_name, host_header + prefix_length, length - prefix_length);
     
     *port = 80;
-    if(strchr(*host_name, ':') != NULL)
-    {
+    if(strchr(*host_name, ':') != NULL){
         strtok (*host_name, ":"); // cut string at colon
         port_str = strtok (NULL, ":"); // get port number
         *port = atoi (port_str); // convert ASCII sting to number
@@ -74,37 +69,7 @@ int get_host_from_headers(char *headers, char **host_name, int *port)
     return 0;
 }
 
-/*
-int get_header_pos(char *buffer, regmatch_t *match)
-{
-    static regex_t regex; // no need to free it
-    static int compiled = 0;
-    regmatch_t pmatch[2];
-    
-    // host: "^Host: [A-Za-z0-9\\-\\.]+(:\\d+)?$"
-    if(compiled == 0)
-    {
-        if(regcomp(&regex, "^Host: [A-Za-z0-9\\-\\.]+(:\\d+)?$", REG_EXTENDED|REG_NOSUB) != 0)
-        {
-            fprintf(stderr, "Cannot compile regex for comparsion!\n");
-            return -1;
-        }
-        compiled = 1;
-    }
-    
-    if(regexec(&regex, buffer, 1, pmatch, 0) != 0)
-    {
-        return -1;
-    }
-    
-    *match = pmatch[1];
-    
-    return 1;
-}
- */
-
-long is_request_complete(char *buffer, long buffer_size)
-{
+long is_request_complete(char *buffer, long buffer_size){
     static size_t prefix_length = strlen("Content-Length: ");
     const char *content_length_header;
     char *data;
@@ -113,39 +78,30 @@ long is_request_complete(char *buffer, long buffer_size)
     long data_length;
     
     content_length_header = strcasestr(buffer, "Content-Length: ");
-    if(content_length_header != NULL)
-    {
+    if(content_length_header != NULL){
         length = strcspn(content_length_header + prefix_length, "\r\n");
-        if(length == strlen(content_length_header + prefix_length)) // returned entire string, no match
-        {
+        if(length == strlen(content_length_header + prefix_length)){ // returned entire string, no match
             return -1;
         }
         char length_str[length+1];
         memcpy(length_str, content_length_header + prefix_length, length);
         length_str[length] = '\0'; // null terminate
         content_length = atoi(length_str);
-    }
-    else
-    {
+    }else{
         content_length = 0;
     }
     
     data = strstr(buffer, "\r\n\r\n");
     if(data == NULL)
         return -1;
-    if(content_length == 0)
-    {
+    if(content_length == 0){
         return 0;
     }
-    else
-    {
+    else{
         data_length = buffer_size - ((data+4) - buffer); // how much data is read
-        if(data_length >= content_length)
-        {
+        if(data_length >= content_length){
             return content_length;
-        }
-        else
-        {
+        }else{
             return -1;
         }
     }
@@ -153,388 +109,258 @@ long is_request_complete(char *buffer, long buffer_size)
     return 0;
 }
 
-Socket *add_socket(int socket_id, SocketType type)
-{
-    Socket *new_socket;
-    new_socket = (Socket*)malloc(sizeof(Socket));
-    new_socket->type = type;
-    new_socket->id = socket_id;
-    new_socket->buffer = (char*)malloc(BUFFER_SIZE);
-    //new_socket->buffer[0] = '\0'; // strlen == 0
-    new_socket->buffer_size = 0;
-    new_socket->connected_socket = NULL;
-    new_socket->next_socket = NULL;
+connection_t *add_connection(int socket){
+    connection_t *new_connection = malloc(sizeof(connection_t));
+    memset(new_connection, 0, sizeof(connection_t)); // zero out everything
+    new_connection->client_socket = socket;
+    new_connection->previous_connection = last_connection;
+    if(last_connection != NULL){
+        last_connection->next_connection = new_connection;
+    }
+    last_connection = new_connection;
     
-    //Add it to the linked list
-    new_socket->prevous_socket = last_socket;
-    last_socket->next_socket = new_socket;
-    last_socket = new_socket;
-    
-    return new_socket;
+    return new_connection;
 }
 
-void remove_socket(Socket *socket)
-{
+void remove_connection(connection_t *connection){
     // remove from linked list
-    socket->prevous_socket->next_socket = socket->next_socket;
-    if(socket->next_socket != NULL)
-        socket->next_socket->prevous_socket = socket->prevous_socket;
-    if(last_socket == socket)
-        last_socket = socket->prevous_socket;
-    free(socket->buffer);
-    free(socket);
+    if(connection->previous_connection != NULL){
+        connection->previous_connection->next_connection = connection->next_connection;
+    }
+    if(connection->next_connection != NULL){
+        connection->next_connection->previous_connection = connection->previous_connection;
+    }
+    if(last_connection == connection){
+        last_connection = connection->previous_connection;
+    }
+    
+    free(connection->request_buffer);
+    free(connection->response_buffer);
+    free(connection);
 }
 
 
-Socket *accept_connection(Socket *listener)
-{
+connection_t *accept_client(int listener){
     int new_client;
-    new_client = accept (listener->id, NULL, NULL);
-    if (new_client < 0)
-    {
+    new_client = accept(listener, NULL, NULL);
+    if(new_client < 0){
         fprintf(stderr, "Error accepting new connection: socket error %d\n", errno);
         return NULL;
     }
     
-    fprintf (stdout, "New connection.\n");
-    FD_SET (new_client, &master_set);
+    fprintf(stdout, "New connection.\n");
+    FD_SET(new_client, &master_set);
     
-    return add_socket(new_client, ClientSocket);
+    return add_connection(new_client);
 }
 
-Socket *close_connection(Socket *socket) // returns the next socket
-{
-    Socket *next;
-    fprintf (stdout, "Closing socket.\n");
-    close (socket->id); // close connection
-    next = socket->next_socket; // get the next socket
-    FD_CLR (socket->id, &master_set);
-    FD_CLR (socket->id, &read_set);
-    FD_CLR (socket->id, &write_set);
-    if(socket->connected_socket != NULL)
-    {
-        if(next == socket->connected_socket)
-            next = socket->connected_socket->next_socket;
-        socket->connected_socket->connected_socket = NULL;
-        close_connection(socket->connected_socket);
-    }
-    remove_socket(socket);
-    return next;
+void close_connection(int socket){
+    close(socket); // close connection
+    FD_CLR(socket, &master_set);
+    FD_CLR(socket, &read_set);
+    FD_CLR(socket, &write_set);
 }
 
-Socket *connect_to_server(struct sockaddr_in *name)
-{
-    int server_id;
-    
-    server_id = socket (PF_INET, SOCK_STREAM, 0);
-    if(server_id < 0)
-    {
-        fprintf(stderr, "Cannot create client socket.\n");
-        return NULL;
-    }
-    if (connect (server_id, (struct sockaddr *) name, sizeof (struct sockaddr)) < 0)
-    {
-        fprintf(stderr, "Cannot connect to server.\n");
-        return NULL;
-    }
-    
-    return add_socket(server_id, ServerSocket);
-}
-
-int create_connection(Socket *client)
-{
+int connect_server(connection_t *connection){
     char *host_name;
-    int port;
+    unsigned short port;
     struct sockaddr_in name;
-    Socket *server;
+    int server_sock;
     
-    if(get_host_from_headers(client->buffer, &host_name, &port) < 0)
-    {
-        fprintf(stderr, "Cannot get hostname from headers.\n");
+    if(get_host_from_headers((char*)connection->request_buffer, &host_name, &port) < 0){
+        fprintf(stderr, "%s\n", "Cannot get hostname from headers.");
         return -1;
     }
     
     fprintf(stdout, "Connecting to %s on port %d.\n", host_name, port);
     
-    if(get_host_addr(&name, host_name, port) < 0)
-    {
+    if(get_host_addr(&name, host_name, port) < 0){
         fprintf(stderr, "Cannot get host address from host name: %s and port: %d.\n", host_name, port);
         return -1;
     }
     
     free(host_name); // no longer needed
     
-    if(client->connected_socket != NULL)
-    {
-        if(compare_host_addr(&name, &client->connected_socket->name) == 0) // We are reusing this socket
-        {
+    if(connection->server_socket > 0){
+        if(compare_host_addr(&name, &connection->server_addr) == 0){ // We are reusing this socket
             return 0;
-        }
-        else // seems like another socket will be created, destroy the old one
-        {
-            client->connected_socket->connected_socket = NULL;
-            close_connection(client->connected_socket);
-            client->connected_socket = NULL;
+        }else{ // seems like another socket will be created, destroy the old one
+            close_connection(connection->server_socket);
+            connection->server_socket = 0;
         }
     }
     
-    if((server = connect_to_server(&name)) == NULL)
-    {
+    server_sock = socket(PF_INET, SOCK_STREAM, 0);
+    if(server_sock < 0){
+        fprintf(stderr, "Cannot create client socket.\n");
         return -1;
     }
-    //Associate with client
-    client->connected_socket = server;
-    server->connected_socket = client;
+    if (connect(server_sock, (struct sockaddr *)&name, sizeof(struct sockaddr)) < 0){
+        fprintf(stderr, "Cannot connect to server.\n");
+        return -1;
+    }
+    connection->server_socket = server_sock;
     
     //Set name
-    server->name = name;
-    
-    //Allow socket to be read
-    FD_SET (server->id, &master_set);
+    connection->server_addr = name;
     
     return 0;
 }
 
-int reconnect(Socket *sock)
-{
-    int new_id;
-    int old_id;
-    
-    old_id = sock->id;
-    close(sock->id);
-    if((new_id = socket (PF_INET, SOCK_STREAM, 0)) < 0)
-    {
-        fprintf(stderr, "Error creating socket. Cannot reconnect!\n");
-        return -1;
-    }
-    
-    sock->id = new_id;
-    
-    if(connect (new_id, (struct sockaddr *) &sock->name, sizeof (struct sockaddr)) < 0)
-    {
-        fprintf(stderr, "Error connecting socket. Cannot reconnect!\n");
-        return -1;
-    }
-    
-    if(FD_ISSET(old_id, &master_set))
-    {
-        FD_CLR(old_id, &master_set);
-        FD_SET(new_id, &master_set);
-    }
-    if(FD_ISSET(old_id, &read_set))
-    {
-        FD_CLR(old_id, &read_set);
-        FD_SET(new_id, &read_set);
-    }
-    if(FD_ISSET(old_id, &write_set))
-    {
-        FD_CLR(old_id, &write_set);
-        FD_SET(new_id, &write_set);
-    }
-    
-    return 0;
-}
 
-int read_socket(Socket *socket)
-{
-    char *buffer;
+ssize_t read_socket(int socket, unsigned char **p_buffer, unsigned long *p_size){
+    unsigned char *buffer = *p_buffer;
+    unsigned long size = *p_size;
     ssize_t count;
     
-    socket->buffer = realloc(socket->buffer, (socket->buffer_size + BUFFER_SIZE) * sizeof(char)); // resize buffer in case the last set was not read yet
-    buffer = socket->buffer + socket->buffer_size;
+    buffer = realloc(buffer, size + MAX_BUFFER_SIZE); // resize buffer in case the last set was not written yet
     
-    count = recv(socket->id, buffer, BUFFER_SIZE - 1, 0); // make room for null terminator
-    buffer[count] = '\0'; // null terminate
-    socket->buffer_size += count;
+    count = recv(socket, buffer + size, MAX_BUFFER_SIZE, 0);
+    size += count;
     
-    if (count < 0) // error
-    {
-        fprintf(stderr, "Error reading socket!\n");
-        return -1;
-    }
-    else if (count == 0) // read no bytes == socket closed from other side
-    {
-        fprintf(stdout, "Client closed socket.\n");
-        return -1;
-    }
-    else
-    {   
-        if(socket->type == ClientSocket)
-        {
-            // check for Content-Length field and/or \r\n\r\n
-            if(is_request_complete(socket->buffer, socket->buffer_size) >= 0)
-            {
-                //fprintf(stdout, "Request header:\n%.*s\n", (int)socket->buffer_size, socket->buffer);
-                if(create_connection(socket) != 0)
-                {
-                    send(socket->id, error_return, strlen(error_return), 0); // send response to client
-                    return -1;
-                }
-                
-                // TODO: Here, we modify the request headers.
-            }
-            else
-            {
-                return 0;
-            }
-        }
-        
-        assert(socket->connected_socket != NULL);
-        FD_SET(socket->connected_socket->id, &write_set); // Can write to connected socket
-    }
-    
-    return 0;
+    return count;
 }
 
-int write_socket(Socket *socket)
-{
-    assert(socket->connected_socket != NULL); // Shouldn't be null or we won't be here
+ssize_t write_socket(int socket, unsigned char **p_buffer, unsigned long *p_size){
+    unsigned char *buffer = *p_buffer;
+    unsigned long size = *p_size;
     ssize_t count;
     
-    count = send(socket->id, socket->connected_socket->buffer, socket->connected_socket->buffer_size, 0);
-    //socket->connected_socket->buffer[0] = '\0'; // Reset buffer, strlen == 0
-    socket->connected_socket->buffer_size = 0;
+    count = send(socket, buffer, size, 0);
+    size = 0;
     
-    if(count < 0) // error
-    {
-        return -1;
-    }
-    
-    return 0;
+    return count;
 }
 
-int create_listener_socket (const char *host, uint16_t port)
-{
+int create_listener_socket(const char *host, uint16_t port){
     int sock;
     struct sockaddr_in name;
     
-    if ((sock = socket (PF_INET, SOCK_STREAM, 0)) < 0) // make the socket
-    {
-        perror ("create");
-        exit (EXIT_FAILURE);
+    if((sock = socket(PF_INET, SOCK_STREAM, 0)) < 0){ // make the socket
+        perror("create");
+        exit(EXIT_FAILURE);
     }
     
     // define the socket parameters
     name.sin_family = AF_INET;
-    name.sin_port = htons (port);
-    if(inet_pton (AF_INET, host, &name.sin_addr.s_addr) < 1) // convert host string to IP type
-    {
+    name.sin_port = htons(port);
+    if(inet_pton(AF_INET, host, &name.sin_addr.s_addr) < 1){ // convert host string to IP type
         perror ("parse");
         close (sock);
         exit (EXIT_FAILURE);
     }
-    if (bind (sock, (struct sockaddr *) &name, sizeof (name)) < 0) // bind the socket
-    {
-        perror ("bind");
-        close (sock);
-        exit (EXIT_FAILURE);
+    if(bind(sock, (struct sockaddr *) &name, sizeof (name)) < 0){ // bind the socket
+        perror("bind");
+        close(sock);
+        exit(EXIT_FAILURE);
     }
     
     return sock;
 }
 
-int main (int argc, const char * argv[])
-{
-    Socket *listener;
-    Socket *current;
+int main (int argc, const char * argv[]){
+    connection_t *current;
+    int listener_socket;
     
-    listener = (Socket*)malloc(sizeof(Socket));
-    listener->type = ListenerSocket;
-    listener->id = create_listener_socket (HOST, atoi(PORT));
-    listener->buffer = NULL;
-    listener->buffer_size = 0;
-    listener->connected_socket = NULL;
-    listener->prevous_socket = NULL;
-    listener->next_socket = NULL;
+    listener_socket = create_listener_socket(HOST, atoi(PORT));
+    last_connection = NULL;
     
-    last_socket = listener;
-    
-    if (listen (listener->id, 1) < 0) // start listening
-    {
-        perror ("listen");
-        close (listener->id);
-        exit (EXIT_FAILURE);
+    if(listen(listener_socket, 1) < 0){ // start listening
+        perror("listen");
+        close(listener_socket);
+        exit(EXIT_FAILURE);
     }
     
     fprintf(stdout, "Started listening on %s port %s\n", HOST, PORT);
     
-    FD_ZERO (&master_set);
-    FD_ZERO (&read_set);
-    FD_ZERO (&write_set);
+    FD_ZERO(&master_set);
+    FD_ZERO(&read_set);
+    FD_ZERO(&write_set);
     
-    FD_SET (listener->id, &master_set);
+    FD_SET(listener_socket, &master_set);
     
-    do
-    {
+    do{
         read_set = master_set;
         
-        if (select (FD_SETSIZE, &read_set, &write_set, NULL, NULL) < 0)
-        {
-            perror ("select");
-            close (listener->id);
-            exit (EXIT_FAILURE);
+        if (select(FD_SETSIZE, &read_set, &write_set, NULL, NULL) < 0){
+            perror("select");
+            close(listener_socket);
+            exit(EXIT_FAILURE);
         }
         
-        for (current = listener; current != NULL; current = current->next_socket)
-        {
-            if (current->id > -1 && FD_ISSET (current->id, &read_set)) // the socket can be read
+        // check listener socket
+        if (FD_ISSET(listener_socket, &read_set)){
+            if(accept_client(listener_socket) == NULL)
             {
-                FD_CLR(current->id, &read_set);
-                if(current->type == ListenerSocket)
-                {
-                    if(accept_connection(listener) == NULL)
-                    {
-                        // TODO: Error handling
-                    }
-                }
-                else
-                {
-                    if (read_socket (current) < 0)
-                    {
-                        if(current->type == ClientSocket)
-                        {
-                            Socket temp;
-                            temp.id = -1;
-                            temp.next_socket = close_connection(current); // so the loop can continue
-                            current = &temp; // so we can still manage the next socket
+                // TODO: Error handling
+            }
+        }
+        
+        for (current = last_connection; current != NULL; current = current->previous_connection){
+            ssize_t count;
+            
+            if (FD_ISSET(current->client_socket, &read_set)){ // request to be read
+                if(current->server_socket > 0 && current->request_size > 0){ // TODO: find if this slows loading down
+                    // woah! too fast. don't read the next request until we parse this one
+                }else{
+                    count = read_socket(current->client_socket, &current->request_buffer, &current->request_size);
+                    if(count > 0){ // read something
+                        if(is_request_complete((char*)current->request_buffer, current->request_size) >= 0){
+                            // TODO: Here, we modify the request headers.
+                            
+                            // duplicate the client connection. we always assume the client wants a
+                            // presistant connection. if we're wrong, it'll be destroied on next select()
+                            if(add_connection(current->client_socket) == NULL){
+                                fprintf(stderr, "%s\n", "Error recycling client connection.");
+                            }
+                            
+                            if(connect_server(current) != 0){ // error creating connection
+                                send(current->client_socket, error_return, strlen(error_return), 0); // send error to client
+                                current->request_size = 0; // no more request to send
+                                current->client_socket = -1; // no more send/recieve here
+                                fprintf(stderr, "%s\n", "Error creating connection to server.");
+                            }else{
+                                FD_SET(current->server_socket, &write_set); // ready to write to server
+                            }
                         }
-                        else if(current->type == ServerSocket && current->buffer_size == 0)
-                        {
-                            Socket temp;
-                            temp.id = -1;
-                            assert(current->connected_socket != NULL);
-                            current->connected_socket->connected_socket = NULL;
-                            current->connected_socket = NULL;
-                            temp.next_socket = close_connection(current); // so the loop can continue
-                            current = &temp; // so we can still manage the next socket
-                        }
+                    }else{ // -1 = error, 0 = complete
+                        // close connection
+                        close_connection(current->client_socket);
+                        close_connection(current->server_socket);
+                        remove_connection(current); // TODO: save before removing
                     }
                 }
             }
-            if (current->id > -1 && FD_ISSET (current->id, &write_set)) // the socket can be written
-            {
-                FD_CLR(current->id, &write_set);
-                if (write_socket (current) < 0)
-                {
-                    if(current->type == ClientSocket)
-                    {
-                        Socket temp;
-                        temp.id = -1;
-                        temp.next_socket = close_connection(current); // so the loop can continue
-                        current = &temp; // so we can still manage the next socket
-                    }
-                    else if(current->type == ServerSocket)
-                    {
-                        if(reconnect(current) < 0)
-                        {
-                            // TODO: Error handling
-                        }
-                    }
+            if (FD_ISSET(current->client_socket, &write_set)){ // response to be written
+                count = write_socket(current->client_socket, &current->response_buffer, &current->response_size);
+                if(count < current->response_size){ // error sending to client
+                    // close connection
+                    close_connection(current->client_socket);
+                    close_connection(current->server_socket);
+                    remove_connection(current); // TODO: save before removing
+                    fprintf(stderr, "%s\n", "Error sending response to client.");
+                }
+            }
+            if (FD_ISSET(current->server_socket, &read_set)){ // response to be read
+                count = read_socket(current->server_socket, &current->response_buffer, &current->response_size);
+                if(count <= 0){ // done reading
+                    close_connection(current->server_socket);
+                    current->server_socket = 0;
+                }
+                FD_SET(current->client_socket, &write_set); // ready to write to client
+            }
+            if (FD_ISSET(current->server_socket, &write_set)){ // request to be written
+                count = write_socket(current->client_socket, &current->request_buffer, &current->request_size);
+                if(count < current->response_size){ // error sending to server
+                    close_connection(current->server_socket);
+                    current->server_socket = 0;
+                    send(current->client_socket, error_return, strlen(error_return), 0); // send error to client
+                    fprintf(stderr, "%s\n", "Error sending request to server.");
                 }
             }
         }
     }while(1);
     
-    free(listener);
+    close(listener_socket);
     return 0;
 }
