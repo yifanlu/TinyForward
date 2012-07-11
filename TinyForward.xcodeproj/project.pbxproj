@@ -94,7 +94,7 @@
 		CEE4223E14536669005E216E /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
-				LastUpgradeCheck = 0420;
+				LastUpgradeCheck = 0430;
 			};
 			buildConfigurationList = CEE4224114536669005E216E /* Build configuration list for PBXProject "TinyForward" */;
 			compatibilityVersion = "Xcode 3.2";

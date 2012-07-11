@@ -22,7 +22,7 @@
 connection_t *last_connection;
 fd_set master_set, read_set, write_set;
 
-inline int compare_host_addr(struct sockaddr_in *name1, struct sockaddr_in *name2){
+int compare_host_addr(struct sockaddr_in *name1, struct sockaddr_in *name2){
     if(name1->sin_addr.s_addr != name2->sin_addr.s_addr)
         return -1;
     if(name1->sin_port != name2->sin_port)
