@@ -2,7 +2,7 @@
 //  tinyforward.c
 //  TinyForward
 //
-//  Copyright (C) 2011  Yifan Lu
+//  Copyright (C) 2012  Yifan Lu
 //  
 //  This program is free software: you can redistribute it and/or modify
 //  it under the terms of the GNU General Public License as published by
@@ -204,6 +204,9 @@ int connect_server(connection_t *connection){
     //Set name
     connection->server_addr = name;
     
+    // set read
+    FD_SET(connection->server_socket, &master_set);
+    
     return 0;
 }
 
@@ -218,6 +221,9 @@ ssize_t read_socket(int socket, unsigned char **p_buffer, unsigned long *p_size)
     count = recv(socket, buffer + size, MAX_BUFFER_SIZE, 0);
     size += count;
     
+    *p_buffer = buffer;
+    *p_size = size;
+    
     return count;
 }
 
@@ -228,6 +234,9 @@ ssize_t write_socket(int socket, unsigned char **p_buffer, unsigned long *p_size
     
     count = send(socket, buffer, size, 0);
     size = 0;
+    
+    *p_buffer = buffer;
+    *p_size = size;
     
     return count;
 }
@@ -290,35 +299,30 @@ int main (int argc, const char * argv[]){
         
         // check listener socket
         if (FD_ISSET(listener_socket, &read_set)){
-            if(accept_client(listener_socket) == NULL)
-            {
+            if(accept_client(listener_socket) == NULL){
                 // TODO: Error handling
             }
         }
         
+        ssize_t count;
+        // first loop for client
         for (current = last_connection; current != NULL; current = current->previous_connection){
-            ssize_t count;
-            
             if (FD_ISSET(current->client_socket, &read_set)){ // request to be read
                 if(current->server_socket > 0 && current->request_size > 0){ // TODO: find if this slows loading down
                     // woah! too fast. don't read the next request until we parse this one
                 }else{
+                    FD_CLR(current->client_socket, &read_set);
                     count = read_socket(current->client_socket, &current->request_buffer, &current->request_size);
                     if(count > 0){ // read something
                         if(is_request_complete((char*)current->request_buffer, current->request_size) >= 0){
                             // TODO: Here, we modify the request headers.
                             
-                            // duplicate the client connection. we always assume the client wants a
-                            // presistant connection. if we're wrong, it'll be destroied on next select()
-                            if(add_connection(current->client_socket) == NULL){
-                                fprintf(stderr, "%s\n", "Error recycling client connection.");
-                            }
-                            
                             if(connect_server(current) != 0){ // error creating connection
                                 send(current->client_socket, error_return, strlen(error_return), 0); // send error to client
-                                current->request_size = 0; // no more request to send
-                                current->client_socket = -1; // no more send/recieve here
+                                close_connection(current->client_socket);
                                 fprintf(stderr, "%s\n", "Error creating connection to server.");
+                                remove_connection(current);
+                                break;
                             }else{
                                 FD_SET(current->server_socket, &write_set); // ready to write to server
                             }
@@ -327,21 +331,28 @@ int main (int argc, const char * argv[]){
                         // close connection
                         close_connection(current->client_socket);
                         close_connection(current->server_socket);
-                        remove_connection(current); // TODO: save before removing
+                        remove_connection(current);
+                        break;
                     }
                 }
             }
             if (FD_ISSET(current->client_socket, &write_set)){ // response to be written
+                FD_CLR(current->client_socket, &write_set);
                 count = write_socket(current->client_socket, &current->response_buffer, &current->response_size);
                 if(count < current->response_size){ // error sending to client
                     // close connection
                     close_connection(current->client_socket);
                     close_connection(current->server_socket);
-                    remove_connection(current); // TODO: save before removing
                     fprintf(stderr, "%s\n", "Error sending response to client.");
+                    remove_connection(current);
+                    break;
                 }
             }
+        }
+        // second loop for the server
+        for (current = last_connection; current != NULL; current = current->previous_connection){
             if (FD_ISSET(current->server_socket, &read_set)){ // response to be read
+                FD_CLR(current->server_socket, &read_set);
                 count = read_socket(current->server_socket, &current->response_buffer, &current->response_size);
                 if(count <= 0){ // done reading
                     close_connection(current->server_socket);
@@ -350,7 +361,8 @@ int main (int argc, const char * argv[]){
                 FD_SET(current->client_socket, &write_set); // ready to write to client
             }
             if (FD_ISSET(current->server_socket, &write_set)){ // request to be written
-                count = write_socket(current->client_socket, &current->request_buffer, &current->request_size);
+                FD_CLR(current->server_socket, &write_set);
+                count = write_socket(current->server_socket, &current->request_buffer, &current->request_size);
                 if(count < current->response_size){ // error sending to server
                     close_connection(current->server_socket);
                     current->server_socket = 0;

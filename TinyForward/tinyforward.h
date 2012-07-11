@@ -1,8 +1,8 @@
 //
-//  tinyforward.c
+//  tinyforward.h
 //  TinyForward
 //
-//  Copyright (C) 2011  Yifan Lu
+//  Copyright (C) 2012  Yifan Lu
 //  
 //  This program is free software: you can redistribute it and/or modify
 //  it under the terms of the GNU General Public License as published by
@@ -33,7 +33,7 @@
 #include <unistd.h>
 
 #define HOST    "0.0.0.0"
-#define PORT    "5555"
+#define PORT    "5560"
 #define MAX_BUFFER_SIZE  10240
 
 typedef struct connection connection_t;
