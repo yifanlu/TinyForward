@@ -348,9 +348,9 @@ int main (int argc, const char * argv[]){
                     break;
                 }
             }
-        }
+        //}
         // second loop for the server
-        for (current = last_connection; current != NULL; current = current->previous_connection){
+        //for (current = last_connection; current != NULL; current = current->previous_connection){
             if (FD_ISSET(current->server_socket, &read_set)){ // response to be read
                 FD_CLR(current->server_socket, &read_set);
                 count = read_socket(current->server_socket, &current->response_buffer, &current->response_size);
