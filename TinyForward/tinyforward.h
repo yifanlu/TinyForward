@@ -39,13 +39,22 @@
 
 typedef struct connection connection_t;
 
+typedef struct request {
+    char *host;
+    int port;
+    int is_http;
+} request_t;
+
 struct connection {
     connection_t *previous_connection;
     int client_socket;
     int server_socket;
     struct sockaddr_in server_addr;
+    request_t request;
     unsigned char *request_buffer;
     unsigned long request_size;
+    unsigned char *current_request_buffer;
+    unsigned long current_request_size;
     unsigned char *response_buffer;
     unsigned long response_size;
     connection_t *next_connection;
