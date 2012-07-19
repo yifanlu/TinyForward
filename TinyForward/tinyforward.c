@@ -147,6 +147,7 @@ connection_t *accept_client(int listener){
         fprintf(stderr, "Error accepting new connection: socket error %d\n", errno);
         return NULL;
     }
+    fcntl(new_client, F_SETFL, O_NONBLOCK); // non-blocking read
     
     fprintf(stdout, "New connection.\n");
     FD_SET(new_client, &master_set);
@@ -210,6 +211,22 @@ int connect_server(connection_t *connection){
     return 0;
 }
 
+int is_http_request(unsigned char *data, unsigned long len){
+    
+}
+
+int handle_request(connection_t *connection){
+    if(!(connection->request_size > 0)){
+        return -1;
+    }
+    // check if it's http
+    // check for transparent
+    // get host and port
+    // check for upstream
+    // open server connection
+    // modify request if necessary
+}
+
 
 ssize_t read_socket(int socket, unsigned char **p_buffer, unsigned long *p_size){
     unsigned char *buffer = *p_buffer;
@@ -219,7 +236,9 @@ ssize_t read_socket(int socket, unsigned char **p_buffer, unsigned long *p_size)
     buffer = realloc(buffer, size + MAX_BUFFER_SIZE); // resize buffer in case the last set was not written yet
     
     count = recv(socket, buffer + size, MAX_BUFFER_SIZE, 0);
-    size += count;
+    if(count > 0){
+        size += count;
+    }
     
     *p_buffer = buffer;
     *p_size = size;
@@ -312,7 +331,14 @@ int main (int argc, const char * argv[]){
                     // woah! too fast. don't read the next request until we parse this one
                 }else{
                     FD_CLR(current->client_socket, &read_set);
-                    count = read_socket(current->client_socket, &current->request_buffer, &current->request_size);
+                    for(;;){
+                        count = read_socket(current->client_socket, &current->request_buffer, &current->request_size);
+                        if(count == 0 || // closed connection
+                          (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))){ // persistant connection
+                            break;
+                        }
+                    }
+                    /*
                     if(count > 0){ // read something
                         if(is_request_complete((char*)current->request_buffer, current->request_size) >= 0){
                             // TODO: Here, we modify the request headers.
@@ -327,7 +353,8 @@ int main (int argc, const char * argv[]){
                                 FD_SET(current->server_socket, &write_set); // ready to write to server
                             }
                         }
-                    }else{ // -1 = error, 0 = complete
+                     */
+                    if(handle_request(current) < 0){ // interpret request
                         // close connection
                         close_connection(current->client_socket);
                         close_connection(current->server_socket);
