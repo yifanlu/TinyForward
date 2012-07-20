@@ -34,7 +34,7 @@
 #include <unistd.h>
 
 #define HOST    "0.0.0.0"
-#define PORT    "5560"
+#define PORT    "8080"
 #define MAX_BUFFER_SIZE  10240
 
 typedef struct connection connection_t;
@@ -49,7 +49,6 @@ struct connection {
     connection_t *previous_connection;
     int client_socket;
     int server_socket;
-    struct sockaddr_in server_addr;
     request_t request;
     unsigned char *request_buffer;
     unsigned long request_size;
@@ -63,21 +62,20 @@ struct connection {
 const char *error_return = "HTTP/1.1 500 Proxy Error\r\n\r\nProxy cannot process request. Error connecting to server.";
 
 /* Helper functions */
-int compare_host_addr(struct sockaddr_in *name1, struct sockaddr_in *name2);
-int get_host_addr(struct sockaddr_in *name, const char *hostName, uint16_t port);
-int get_host_from_headers(char *headers, char **host_name, unsigned short *port);
-long is_request_complete(char *buffer, long buffer_size);
+int opensock (const char *host, int port);
+int is_http_request(unsigned char *data, unsigned long len);
+int get_host_port(unsigned char *request, unsigned long len, char** host, int *port);
 
 /* Linked list functions */
 connection_t *add_connection(int socket);
-void remove_connection(connection_t *connection);
+void remove_connection(connection_t *conn);
 
 /* Connecting clients */
 connection_t *accept_client(int listener);
 void close_connection(int socket);
 
 /* Connecting servers */
-int connect_server(connection_t *connection);
+int handle_request(connection_t *conn);
 
 /* Sockets IO */
 ssize_t read_socket(int socket, unsigned char **p_buffer, unsigned long *p_size);
