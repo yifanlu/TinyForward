@@ -34,8 +34,10 @@
 #include <unistd.h>
 
 #define HOST    "0.0.0.0"
-#define PORT    "8080"
+#define PORT    "5555"
 #define MAX_BUFFER_SIZE  10240
+#define DEBUG_READ
+#define DEBUG_WRITE
 
 typedef struct connection connection_t;
 
@@ -58,8 +60,6 @@ struct connection {
     unsigned long response_size;
     connection_t *next_connection;
 };
-
-const char *error_return = "HTTP/1.1 500 Proxy Error\r\n\r\nProxy cannot process request. Error connecting to server.";
 
 /* Helper functions */
 int opensock (const char *host, int port);
