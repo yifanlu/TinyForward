@@ -126,6 +126,7 @@ int opensock (const char *host, int port)
     freeaddrinfo (ressave);
     if (res == NULL) {
         fprintf(stderr, "opensock: Could not establish a connection to %s\n", host);
+        close(sockfd);
         return -1;
     }
     
@@ -235,6 +236,7 @@ error:
 connection_t *add_connection(int socket){
     connection_t *new_connection = malloc(sizeof(connection_t));
     memset(new_connection, 0, sizeof(connection_t)); // zero out everything
+    new_connection->server_socket = -1; // no socket yet
     new_connection->client_socket = socket;
     new_connection->previous_connection = g_last_connection;
     if(g_last_connection != NULL){
@@ -297,10 +299,6 @@ int handle_request(connection_t *conn){
     socklen_t length;
     int port;
     
-    if(!(conn->request_size > 0)){
-        fprintf(stderr, "Request is invalid\n");
-        return -1;
-    }
     if(is_http_request(conn->request_buffer, conn->request_size)){ // is HTTP
         if(strncmp((char*)conn->request_buffer, "CONNECT", 7) == 0){ // special upstream considerations
             if(g_upstream_ssl_host != NULL){
@@ -389,7 +387,6 @@ int handle_request(connection_t *conn){
     fprintf(stderr, "Connected to %s:%d\n", host, port);
     if(conn->server_socket < 0){
         fprintf(stderr, "Cannot connect to server.\n");
-        conn->server_socket = -1;
         goto error;
     }
     // save server details
@@ -549,9 +546,21 @@ int main (int argc, const char * argv[]){
         g_read_set = g_master_set;
         
         if (select(FD_SETSIZE, &g_read_set, &g_write_set, NULL, NULL) < 0){
+            fprintf(stderr, "Exception in select().\n");
+            for(int s = 0; s < FD_SETSIZE; s++){
+                FD_CLR(s, &g_master_set);
+                g_read_set = g_master_set;
+                int n = select(FD_SETSIZE, &g_read_set, NULL, NULL, NULL);
+                fprintf(stderr, "Sock: %d removed, status: %d\n", s, n);
+                if(n >= 0)
+                    break;
+            }
+            
+            /*
             perror("select");
             close(listener_socket);
             exit(EXIT_FAILURE);
+             */
         }
         
         // check listener socket
@@ -564,6 +573,7 @@ int main (int argc, const char * argv[]){
         }
         
         ssize_t count;
+        int error = 0;
         // first loop for client
         for (current = g_last_connection; current != NULL; current = current->previous_connection){
             if (FD_ISSET(current->client_socket, &g_read_set)){ // request to be read
@@ -575,19 +585,18 @@ int main (int argc, const char * argv[]){
                         break;
                     }else if(count < 0){
                         fprintf(stderr, "%s\n", "Error reading request.");
-                        current->request_size = 0; // clear the buffer, client has broken the pipe
-                        break;
+                        error = 1;
                     }
                 }
-                if(current->request_size > 0){
-                    FD_SET(current->client_socket, &g_handle_set);
-                }else{ // nothing to do now
+                if(error || current->request_size == 0){
+                    error = 0;
                     // close connection
                     close_connection(current->client_socket);
                     close_connection(current->server_socket);
                     remove_connection(current);
                     break;
                 }
+                FD_SET(current->client_socket, &g_handle_set);
             }
             if (FD_ISSET(current->client_socket, &g_handle_set)){ // handle request
                 FD_CLR(current->client_socket, &g_handle_set);
